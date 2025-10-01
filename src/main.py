@@ -31,6 +31,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:8000",
         "https://resumeatschecker-1-eeh8.onrender.com",
+        "https://ats-resume-frontend-phi.vercel.app/",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -66,7 +67,13 @@ You are a resume parsing assistant. The user will provide a resume and optionall
 If job description is provided, analyze the resume against it.
 If no job description but role is provided, use market-standard keywords relevant to the role.
 If neither is provided, perform a generic ATS analysis based on market standards.
-
+Your tasks:
+1. **Skills**: Identify a 'Skills' section. Categorize the skills as technical (e.g., programming languages, tools) or soft skills (e.g., communication, leadership). If a 'Skills' section is missing or not properly categorized, suggest improvements.
+2. **Education**: Extract the degree, institution, and dates from the 'Education' section. If incomplete or misformatted, suggest improvements.
+3. **Experience**: Evaluate the experience descriptions and ensure measurable achievements are highlighted (e.g., "Improved application performance by X%").
+4. **Certifications**: Identify any certifications and verify if they are listed properly with issuing organizations and dates.
+5. **Contact Information**: Ensure email and phone number are present and correctly formatted.
+6. **ATS Keywords**: Compare the resume content against the job description or role keywords or ats analysis based on market standards..
 Return ONLY valid JSON (no explanation outside JSON). The JSON must contain these top-level keys:
 - name (String or null)
 - contact (object: email, phone if available else null)
