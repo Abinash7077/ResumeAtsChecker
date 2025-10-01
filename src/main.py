@@ -8,25 +8,25 @@ from dotenv import load_dotenv
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import CharacterTextSplitter
 import google.generativeai as genai
+import asyncio
 
 # Load .env
 load_dotenv()
-
-# Correct env key
 API_KEY = os.getenv("GENAI_API_KEY")
 if not API_KEY:
     raise RuntimeError("GENAI_API_KEY environment variable not set")
 
-# Proper way to configure Gemini
+# Configure Gemini
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
-# FastAPI app setup
-app = FastAPI()
 
+# FastAPI setup
+app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-   allow_origins=[
+    allow_origins=[
         "http://localhost",
         "http://localhost:3000",
         "http://127.0.0.1:8000",
@@ -42,6 +42,15 @@ def extract_text_from_pdf(file_path: str) -> str:
     loader = PyPDFLoader(file_path)
     docs = loader.load()
     return "\n".join([d.page_content for d in docs])
+
+# Text splitter
+def split_text_into_chunks(text, chunk_size=2500, chunk_overlap=200):
+    splitter = CharacterTextSplitter(
+        separator="\n",
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+    return splitter.split_text(text)
 
 # Prompt generator
 def make_prompt(resumeText, job_desc="", role=""):
@@ -78,7 +87,59 @@ Job Description or Role:
 
 Return only JSON response.
 """
-# POST endpoint
+
+# Merge chunk results
+def merge_results(results):
+    merged = {
+        "name": None,
+        "contact": {"email": None, "phone": None},
+        "skills": [],
+        "experience": [],
+        "education": [],
+        "certifications": [],
+        "ats_score": 0,
+        "keywords": [],
+        "suggestions": [],
+        "ats_reason": "",
+    }
+
+    for r in results:
+        for key in ["skills", "experience", "education", "certifications", "keywords", "suggestions"]:
+            merged[key].extend(r.get(key, []))
+        if not merged["name"] and r.get("name"):
+            merged["name"] = r["name"]
+        if not merged["contact"]["email"] and r.get("contact", {}).get("email"):
+            merged["contact"]["email"] = r["contact"]["email"]
+        if not merged["contact"]["phone"] and r.get("contact", {}).get("phone"):
+            merged["contact"]["phone"] = r["contact"]["phone"]
+
+    scores = [r.get("ats_score", 0) for r in results if isinstance(r.get("ats_score"), (int, float))]
+    merged["ats_score"] = sum(scores) // len(scores) if scores else 0
+
+    # Deduplicate lists
+    for key in ["skills", "keywords", "suggestions"]:
+        merged[key] = list(dict.fromkeys(merged[key]))
+
+    return merged
+
+# Async chunk processing
+async def process_chunk(chunk, job_description=""):
+    prompt = make_prompt(chunk, job_description)
+    response = model.generate_content(prompt)
+    raw_text = response.text
+    match = re.search(r"\{.*\}", raw_text, flags=re.DOTALL)
+    json_text = match.group(0) if match else raw_text.strip()
+    try:
+        parsed = json.loads(json_text)
+    except json.JSONDecodeError:
+        parsed = {"raw_output": raw_text, "error": "Failed to parse JSON"}
+    return parsed
+
+async def process_chunks_concurrent(chunks, job_description=""):
+    tasks = [process_chunk(chunk, job_description) for chunk in chunks]
+    return await asyncio.gather(*tasks)
+
+# POST endpoint with async chunk processing
 @app.post("/parse_resume")
 async def parse_resume(file: UploadFile = File(...), job_description: str = Form("")):
     with NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp:
@@ -87,21 +148,10 @@ async def parse_resume(file: UploadFile = File(...), job_description: str = Form
 
     try:
         resume_text = extract_text_from_pdf(tmp_path)
-        prompt = make_prompt(resume_text, job_description)
+        chunks = split_text_into_chunks(resume_text)
+        chunk_results = await process_chunks_concurrent(chunks, job_description)
+        merged_result = merge_results(chunk_results)
 
-        response = model.generate_content(prompt)
-        raw_text = response.text
-
-        # Try to extract JSON
-        match = re.search(r"\{.*\}", raw_text, flags=re.DOTALL)
-        json_text = match.group(0) if match else raw_text.strip()
-
-        try:
-            parsed = json.loads(json_text)
-        except json.JSONDecodeError:
-            parsed = {"raw_output": raw_text, "error": "Failed to parse JSON"}
-
-        return JSONResponse(content={"ok": True, "data": parsed})
-
+        return JSONResponse(content={"ok": True, "data": merged_result})
     finally:
         os.remove(tmp_path)
