@@ -31,7 +31,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:8000",
         "https://resumeatschecker-1-eeh8.onrender.com",
-        "https://ats-resume-frontend-phi.vercel.app/",
+        "https://ats-resume-frontend-phi.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
